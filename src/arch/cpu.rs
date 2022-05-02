@@ -311,7 +311,12 @@ impl Cpu {
                                 InstructionProcedure::new(ld_rr)
                         },
                         2 => match y {
+                            0 => InstructionProcedure::new(add_ar),
+                            2 => InstructionProcedure::new(sub_ar),
+                            4 => InstructionProcedure::new(and_ar),
                             5 => InstructionProcedure::new(xor_ar),
+                            6 => InstructionProcedure::new(or_ar),
+                            7 => InstructionProcedure::new(cp_ar),
                             _ => todo!()
                         },
                         3 => match z {
@@ -332,7 +337,9 @@ impl Cpu {
                             },
                             2 => match y {
                                 4 => InstructionProcedure::new(ld_toio_c),
+                                5 => InstructionProcedure::new(ld_u16a),
                                 6 => InstructionProcedure::new(ld_fromio_c),
+                                7 => InstructionProcedure::new(ld_au16),
                                 _ => todo!()
                             },
                             
@@ -435,6 +442,35 @@ fn ld_u16sp(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         _ => ()
     }
 }
+/// 0xEA
+fn ld_u16a(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => proc.tmp0 = cpu.fetch(bus),
+        3 => proc.tmp1 = cpu.fetch(bus),
+        4 => {
+            let addr = ((proc.tmp1 as u16) << 8) | (proc.tmp0 as u16);
+            bus.write(addr, cpu.regs.a);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0xFA
+fn ld_au16(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => proc.tmp0 = cpu.fetch(bus),
+        3 => proc.tmp1 = cpu.fetch(bus),
+        4 => {
+            let addr = ((proc.tmp1 as u16) << 8) | (proc.tmp0 as u16);
+            cpu.regs.a = bus.read(addr);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+
 /// 0x18
 fn jr_d(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     match proc.mcycle {
@@ -484,11 +520,10 @@ fn inc_r(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         1 => {
             #[inline]
             fn mut_overflow_add(reg: &mut u8, over: &mut bool) -> u8 {
-                let (val, carry) = reg.overflowing_add(1);
-                *reg = val;
-                *over = carry;
-
-                val
+                *over = ((*reg & 0x0F).wrapping_add(1) & 0x10) != 0;
+                *reg = reg.wrapping_add(1);
+                
+                *reg
             }
             
             let opcode = bus.read(cpu.regs.pc - 1);
@@ -512,6 +547,7 @@ fn inc_r(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
             proc.done = true;
         },
         2 => {
+            todo!(); //this code calulates halfcarry wrong
             let (val, carry) = bus.read(cpu.regs.hl()).overflowing_add(1);
             proc.tmp0 = val;
             proc.tmp1 = carry as u8;
@@ -533,11 +569,10 @@ fn dec_r(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         1 => {
             #[inline]
             fn mut_overflow_sub(reg: &mut u8, over: &mut bool) -> u8 {
-                let (val, carry) = reg.overflowing_sub(1);
-                *reg = val;
-                *over = carry;
-
-                val
+                *over = ((*reg & 0x0F).wrapping_sub(1) & 0x10) != 0;
+                *reg = reg.wrapping_sub(1);
+                
+                *reg
             }
             
             let opcode = bus.read(cpu.regs.pc - 1);
@@ -561,6 +596,7 @@ fn dec_r(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
             proc.done = true;
         },
         2 => {
+            todo!(); //this code calulates halfcarry wrong
             let (val, carry) = bus.read(cpu.regs.hl()).overflowing_sub(1);
             proc.tmp0 = val;
             proc.tmp1 = carry as u8;
@@ -652,6 +688,115 @@ fn dec_rp(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     }
 }
 
+/// 0x80 - 0x87
+fn add_ar(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            let opcode = bus.read(cpu.regs.pc - 1);
+            
+            let (result, zer, _, half, carry) = alu_add(cpu.regs.a, match opcode & 0b00000111 {
+                0 => cpu.regs.b,
+                1 => cpu.regs.c,
+                2 => cpu.regs.d,
+                3 => cpu.regs.d,
+                4 => cpu.regs.h,
+                5 => cpu.regs.l,
+                6 => return, // wait another mcycle for special case 'A,(HL)'
+                7 => cpu.regs.a,
+                _ => panic!("unreachable")
+            });
+            cpu.regs.a = result;
+            cpu.regs.f.set(FlagsReg::Zero, zer);
+            cpu.regs.f.set(FlagsReg::Negative, false);
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
+            
+            proc.done = true;
+        },
+        2 => {
+            let (result, zer, _, half, carry) = alu_add(cpu.regs.a, bus.read(cpu.regs.hl()));
+            cpu.regs.a = result;
+            cpu.regs.f.set(FlagsReg::Zero, zer);
+            cpu.regs.f.set(FlagsReg::Negative, false);
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0x90 - 0x97
+fn sub_ar(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            let opcode = bus.read(cpu.regs.pc - 1);
+            
+            let (result, zer, _, half, carry) = alu_sub(cpu.regs.a, match opcode & 0b00000111 {
+                0 => cpu.regs.b,
+                1 => cpu.regs.c,
+                2 => cpu.regs.d,
+                3 => cpu.regs.d,
+                4 => cpu.regs.h,
+                5 => cpu.regs.l,
+                6 => return, // wait another mcycle for special case 'A,(HL)'
+                7 => cpu.regs.a,
+                _ => panic!("unreachable")
+            });
+            cpu.regs.a = result;
+            cpu.regs.f.set(FlagsReg::Zero, zer);
+            cpu.regs.f.set(FlagsReg::Negative, true);
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
+            
+            proc.done = true;
+        },
+        2 => {
+            let (result, zer, _, half, carry) = alu_sub(cpu.regs.a, bus.read(cpu.regs.hl()));
+            cpu.regs.a = result;
+            cpu.regs.f.set(FlagsReg::Zero, zer);
+            cpu.regs.f.set(FlagsReg::Negative, true);
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0xA0 - 0xA7
+fn and_ar(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            let opcode = bus.read(cpu.regs.pc - 1);
+            
+            cpu.regs.a &= match opcode & 0b00000111 {
+                0 => cpu.regs.b,
+                1 => cpu.regs.c,
+                2 => cpu.regs.d,
+                3 => cpu.regs.d,
+                4 => cpu.regs.h,
+                5 => cpu.regs.l,
+                6 => return, // wait another mcycle for special case 'A,(HL)'
+                7 => cpu.regs.a,
+                _ => panic!("unreachable")
+            };
+            cpu.regs.f.bits = 0;
+            cpu.regs.f.set(FlagsReg::Zero, cpu.regs.a == 0);
+            
+            proc.done = true;
+        },
+        2 => {
+            cpu.regs.a &= bus.read(cpu.regs.hl());
+            cpu.regs.f.bits = 0;
+            cpu.regs.f.set(FlagsReg::Zero, cpu.regs.a == 0);
+            cpu.regs.f.set(FlagsReg::HalfCarry, true);
+            
+            proc.done = true;
+        }
+        _ => ()
+    }
+}
 /// 0xA8 - 0xAF
 fn xor_ar(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     match proc.mcycle {
@@ -665,7 +810,7 @@ fn xor_ar(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
                 3 => cpu.regs.d,
                 4 => cpu.regs.h,
                 5 => cpu.regs.l,
-                6 => return, // wait another mcycle for special case 'XOR A,(HL)'
+                6 => return, // wait another mcycle for special case 'A,(HL)'
                 7 => cpu.regs.a,
                 _ => panic!("unreachable")
             };
@@ -684,6 +829,75 @@ fn xor_ar(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         _ => ()
     }
 }
+/// 0xB0 - 0xB7
+fn or_ar(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            let opcode = bus.read(cpu.regs.pc - 1);
+            
+            cpu.regs.a |= match opcode & 0b00000111 {
+                0 => cpu.regs.b,
+                1 => cpu.regs.c,
+                2 => cpu.regs.d,
+                3 => cpu.regs.d,
+                4 => cpu.regs.h,
+                5 => cpu.regs.l,
+                6 => return, // wait another mcycle for special case 'A,(HL)'
+                7 => cpu.regs.a,
+                _ => panic!("unreachable")
+            };
+            cpu.regs.f.bits = 0;
+            cpu.regs.f.set(FlagsReg::Zero, cpu.regs.a == 0);
+            
+            proc.done = true;
+        },
+        2 => {
+            cpu.regs.a |= bus.read(cpu.regs.hl());
+            cpu.regs.f.bits = 0;
+            cpu.regs.f.set(FlagsReg::Zero, cpu.regs.a == 0);
+            
+            proc.done = true;
+        }
+        _ => ()
+    }
+}
+/// 0xB8 - 0xBF
+fn cp_ar(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            let opcode = bus.read(cpu.regs.pc - 1);
+            
+            let (result, zer, _, half, carry) = alu_sub(cpu.regs.a, match opcode & 0b00000111 {
+                0 => cpu.regs.b,
+                1 => cpu.regs.c,
+                2 => cpu.regs.d,
+                3 => cpu.regs.d,
+                4 => cpu.regs.h,
+                5 => cpu.regs.l,
+                6 => return, // wait another mcycle for special case 'A,(HL)'
+                7 => cpu.regs.a,
+                _ => panic!("unreachable")
+            });
+            cpu.regs.f.set(FlagsReg::Zero, zer);
+            cpu.regs.f.set(FlagsReg::Negative, true);
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
+            
+            proc.done = true;
+        },
+        2 => {
+            let (result, zer, _, half, carry) = alu_sub(cpu.regs.a, bus.read(cpu.regs.hl()));
+            cpu.regs.f.set(FlagsReg::Zero, zer);
+            cpu.regs.f.set(FlagsReg::Negative, true);
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+
 /// 0x06, 0x16, 0x26, 0x36, 0x0E, 0x1E, 0x2E, 0x3E
 fn ld_ru8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     match proc.mcycle {
@@ -1269,4 +1483,29 @@ fn bit(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         }
         _ => ()
     }
+}
+
+// ALU Utilities
+#[inline(always)]
+fn alu_add(lhs: u8, rhs: u8) -> (u8, bool, bool, bool, bool) {
+    let result = lhs.wrapping_add(rhs);
+    (
+        result,
+        result == 0,
+        (result as i8).is_negative(),
+        ((lhs & 0x0F).wrapping_add(rhs & 0x0F) & 0x10) != 0, //TODO: check if this is correct for 'add'
+        lhs.overflowing_add(rhs).1,
+    )
+}
+
+#[inline(always)]
+fn alu_sub(lhs: u8, rhs: u8) -> (u8, bool, bool, bool, bool) {
+    let result = lhs.wrapping_sub(rhs);
+    (
+        result,
+        result == 0,
+        (result as i8).is_negative(),
+        ((lhs & 0x0F).wrapping_sub(rhs & 0x0F) & 0x10) != 0,
+        lhs.overflowing_sub(rhs).1,
+    )
 }

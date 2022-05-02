@@ -41,6 +41,7 @@ fn main() {
     let mut gb = Gameboy::new(SystemMode::Gameboy);
     gb.bus.get_mut().boot_rom = *include_bytes!("../bootroms/DMG1.rom");
     gb.bus.get_mut().cart.rom.extend_from_slice(include_bytes!("/data/storage/roms/gb-nointro/Boxxle (USA).gb"));
+    
     let mut log = String::new();
     
     let start = Instant::now();
@@ -49,7 +50,7 @@ fn main() {
     let mut last_count = 0usize;
     let mut counter = 0usize;
     loop {
-        let bus = gb.bus.get_mut();
+        /*let bus = gb.bus.get_mut();
         let cpu = &gb.bus.get().cpu;
         if cpu.instr_count > last_count || cpu.instr_count == 0 {
             last_count = cpu.instr_count;
@@ -62,17 +63,17 @@ fn main() {
         if cpu.instr_count == 47932 {
             std::fs::write("log.txt", log).unwrap();
             std::process::exit(0);
-        }
+        }*/
         
         gb.mcycle();
         counter += 1;
         
-        /*if counter == 2097152 {
+        if counter == 2097152 * 60 {
             let elapsed = start.elapsed().as_secs_f64();
-            info!("Time: {:.3}us | Factor: {:.3}", elapsed * 1000000.0, (60.0 * 60.0 * 24.0) / elapsed);
+            info!("Time: {:.3}us | Factor: {:.3}", elapsed * 1000000.0, 60.0 / elapsed);
             
             break;
-        }*/
+        }
     }
     
     

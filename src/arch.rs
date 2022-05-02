@@ -127,6 +127,7 @@ impl Gameboy {
         let passed_bus = self.bus.get_mut();
         
         bus.cpu.tcycle(passed_bus);
+        bus.ppu.tcycle(passed_bus);
         
         self.tcycles += 1;
     }
