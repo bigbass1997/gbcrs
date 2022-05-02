@@ -232,12 +232,12 @@ impl Cpu {
     pub fn tcycle(&mut self, bus: &mut Bus) {
         if self.tcount == 0 {
             //debug!("ROW: {:06} | PC: {:04X} = {:02X} | F: {} {:02X} | SP: {:04X} | HL: {:04X}", self.instr_count, self.regs.pc, bus.read(self.regs.pc), self.regs.f, self.regs.f, self.regs.sp, self.regs.hl());
-            
+            debug!("{:06}| A: {:02X} F: {:02X} B: {:02X} C: {:02X} D: {:02X} E: {:02X} H: {:02X} L: {:02X} SP: {:04X} PC: 00:{:04X} ({:02X} {:02X} {:02X} {:02X})",
+                self.instr_count, self.regs.a, self.regs.f.bits, self.regs.b, self.regs.c, self.regs.d, self.regs.e, self.regs.h, self.regs.l, self.regs.sp, self.regs.pc, bus.read(self.regs.pc), bus.read(self.regs.pc + 1), bus.read(self.regs.pc + 2), bus.read(self.regs.pc + 3)
+            );
             
             if self.procedure.is_none() {
-                //debug!("{:06}| A: {:02X} F: {:02X} B: {:02X} C: {:02X} D: {:02X} E: {:02X} H: {:02X} L: {:02X} SP: {:04X} PC: 00:{:04X} ({:02X} {:02X} {:02X} {:02X})",
-                //    self.instr_count, self.regs.a, self.regs.f.bits, self.regs.b, self.regs.c, self.regs.d, self.regs.e, self.regs.h, self.regs.l, self.regs.sp, self.regs.pc, bus.read(self.regs.pc), bus.read(self.regs.pc + 1), bus.read(self.regs.pc + 2), bus.read(self.regs.pc + 3)
-                //);
+                
                 
                 let opcode = self.fetch(bus);
                 let x = (opcode & 0b11000000) >> 6;
@@ -245,7 +245,7 @@ impl Cpu {
                 let z = opcode & 0b00000111;
                 let p = y >> 1;
                 let q = y & 0b1;
-                //debug!("x: {} | z: {} | y: {} | p: {} | q: {}", x, z, y, p, q);
+                debug!("x: {} | z: {} | y: {} | p: {} | q: {}", x, z, y, p, q);
                 
                 self.procedure = Some(match opcode {
                     0xDD | 0xFD => unimplemented!(),
@@ -254,7 +254,7 @@ impl Cpu {
                         let opcode = self.fetch(bus);
                         let x = (opcode & 0b11000000) >> 6;
                         let y = (opcode & 0b00111000) >> 3;
-                        //debug!("op: {:02X} | x: {} | y: {}", opcode, x, y);
+                        debug!("op: {:02X} | x: {} | y: {}", opcode, x, y);
                         
                         match x {
                             0 => InstructionProcedure::new(rot),
@@ -344,7 +344,18 @@ impl Cpu {
                                     _ => panic!("unreachable")
                                 }
                                 _ => panic!("unreachable")
-                            } 
+                            }
+                            6 => match y {
+                                //0 => InstructionProcedure::new(add_au8),
+                                //1 => InstructionProcedure::new(adc_au8),
+                                //2 => InstructionProcedure::new(sub_au8),
+                                //3 => InstructionProcedure::new(sbc_au8),
+                                //4 => InstructionProcedure::new(and_au8),
+                                //5 => InstructionProcedure::new(xor_au8),
+                                //6 => InstructionProcedure::new(or_au8),
+                                7 => InstructionProcedure::new(cp_au8),
+                                _ => todo!()
+                            }
                             _ => todo!()
                         },
                         _ => panic!("unreachable")
@@ -779,6 +790,7 @@ fn ld_rr(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
 fn rlca(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     match proc.mcycle {
         1 => {
+            cpu.regs.f.bits = 0;
             cpu.regs.f.set(FlagsReg::Carry, (cpu.regs.a & 0x80) != 0);
             cpu.regs.a = cpu.regs.a.rotate_left(1);
             
@@ -791,6 +803,7 @@ fn rlca(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
 fn rrca(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     match proc.mcycle {
         1 => {
+            cpu.regs.f.bits = 0;
             cpu.regs.f.set(FlagsReg::Carry, (cpu.regs.a & 0x01) != 0);
             cpu.regs.a = cpu.regs.a.rotate_right(1);
             
@@ -805,6 +818,7 @@ fn rla(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         1 => {
             let carry = (cpu.regs.a & 0x80) != 0;
             cpu.regs.a = (cpu.regs.a.rotate_left(1) & 0xFE) | (cpu.regs.f.intersects(FlagsReg::Carry) as u8);
+            cpu.regs.f.bits = 0;
             cpu.regs.f.set(FlagsReg::Carry, carry);
             
             proc.done = true;
@@ -818,6 +832,7 @@ fn rra(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         1 => {
             let carry = (cpu.regs.a & 0x01) != 0;
             cpu.regs.a = (cpu.regs.a.rotate_right(1) & 0x7F) | ((cpu.regs.f.intersects(FlagsReg::Carry) as u8) << 7);
+            cpu.regs.f.bits = 0;
             cpu.regs.f.set(FlagsReg::Carry, carry);
             
             proc.done = true;
@@ -873,6 +888,23 @@ fn ccf(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
 /// 0xEE
 fn xor_au8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     todo!()
+}
+/// 0xFE
+fn cp_au8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => {
+            let val = cpu.fetch(bus);
+            let result = cpu.regs.a - val;
+            
+            cpu.regs.f.set(FlagsReg::Zero, result == 0);
+            cpu.regs.f.set(FlagsReg::Negative, true);
+            cpu.regs.f.set(FlagsReg::HalfCarry, ((cpu.regs.a & 0x0F).wrapping_sub(val & 0x0F) & 0x10) != 0);
+            cpu.regs.f.set(FlagsReg::Carry, val > cpu.regs.a);
+            
+            proc.done = true;
+        }
+        _ => ()
+    }
 }
 
 /// Load A into indirect
