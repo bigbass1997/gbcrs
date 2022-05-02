@@ -78,12 +78,20 @@ impl Regs {
     pub fn new(mode: SystemMode) -> Self {
         use SystemMode::*;
         match mode {
-            Gameboy => Self {
+            /*Gameboy => Self {
                 a: 0x01, f: FlagsReg::from_bits_truncate(0xB0),
                 b: 0x00, c: 0x13,
                 d: 0x00, e: 0xD8,
                 h: 0x01, l: 0x4D,
                 sp: 0xFFFE,
+                pc: 0x0000,
+            },*/
+            Gameboy => Self {
+                a: 0x00, f: FlagsReg::from_bits_truncate(0x00),
+                b: 0x00, c: 0x00,
+                d: 0x00, e: 0x00,
+                h: 0x00, l: 0x00,
+                sp: 0x0000,
                 pc: 0x0000,
             },
             GameboyPocket => Self {
@@ -206,10 +214,10 @@ impl Regs {
 
 #[derive(Clone, Debug)]
 pub struct Cpu {
-    instr_count: usize, // debug only
+    pub instr_count: usize, // debug only
     mode: SystemMode,
     tcount: u8,
-    procedure: Option<InstructionProcedure>,
+    pub procedure: Option<InstructionProcedure>,
     pub regs: Regs,
 }
 impl Cpu {
@@ -224,18 +232,20 @@ impl Cpu {
     pub fn tcycle(&mut self, bus: &mut Bus) {
         if self.tcount == 0 {
             //debug!("ROW: {:06} | PC: {:04X} = {:02X} | F: {} {:02X} | SP: {:04X} | HL: {:04X}", self.instr_count, self.regs.pc, bus.read(self.regs.pc), self.regs.f, self.regs.f, self.regs.sp, self.regs.hl());
-            debug!("{:06}| A: {:02X} F: {:02X} B: {:02X} C: {:02X} D: {:02X} E: {:02X} H: {:02X} L: {:02X} SP: {:04X} PC: 00:{:04X} ({:02X} {:02X})",
-                self.instr_count, self.regs.a, self.regs.f.bits, self.regs.b, self.regs.c, self.regs.d, self.regs.e, self.regs.h, self.regs.l, self.regs.sp, self.regs.pc, bus.read(self.regs.pc), bus.read(self.regs.pc + 1)
-            );
+            
             
             if self.procedure.is_none() {
+                //debug!("{:06}| A: {:02X} F: {:02X} B: {:02X} C: {:02X} D: {:02X} E: {:02X} H: {:02X} L: {:02X} SP: {:04X} PC: 00:{:04X} ({:02X} {:02X} {:02X} {:02X})",
+                //    self.instr_count, self.regs.a, self.regs.f.bits, self.regs.b, self.regs.c, self.regs.d, self.regs.e, self.regs.h, self.regs.l, self.regs.sp, self.regs.pc, bus.read(self.regs.pc), bus.read(self.regs.pc + 1), bus.read(self.regs.pc + 2), bus.read(self.regs.pc + 3)
+                //);
+                
                 let opcode = self.fetch(bus);
                 let x = (opcode & 0b11000000) >> 6;
                 let y = (opcode & 0b00111000) >> 3;
                 let z = opcode & 0b00000111;
                 let p = y >> 1;
                 let q = y & 0b1;
-                debug!("x: {} | z: {} | y: {} | p: {} | q: {}", x, z, y, p, q);
+                //debug!("x: {} | z: {} | y: {} | p: {} | q: {}", x, z, y, p, q);
                 
                 self.procedure = Some(match opcode {
                     0xDD | 0xFD => unimplemented!(),
@@ -244,7 +254,7 @@ impl Cpu {
                         let opcode = self.fetch(bus);
                         let x = (opcode & 0b11000000) >> 6;
                         let y = (opcode & 0b00111000) >> 3;
-                        debug!("op: {:02X} | x: {} | y: {}", opcode, x, y);
+                        //debug!("op: {:02X} | x: {} | y: {}", opcode, x, y);
                         
                         match x {
                             0 => InstructionProcedure::new(rot),
@@ -274,10 +284,25 @@ impl Cpu {
                                 1 => InstructionProcedure::new(ld_fromindirect),
                                 _ => panic!("unreachable")
                             },
-                            
+                            3 => match q {
+                                0 => InstructionProcedure::new(inc_rp),
+                                1 => InstructionProcedure::new(dec_rp),
+                                _ => panic!("unreachable")
+                            }
                             4 => InstructionProcedure::new(inc_r),
                             5 => InstructionProcedure::new(dec_r),
                             6 => InstructionProcedure::new(ld_ru8),
+                            7 => match y {
+                                0 => InstructionProcedure::new(rlca),
+                                1 => InstructionProcedure::new(rrca),
+                                2 => InstructionProcedure::new(rla),
+                                3 => InstructionProcedure::new(rra),
+                                4 => InstructionProcedure::new(daa),
+                                5 => InstructionProcedure::new(cpl),
+                                6 => InstructionProcedure::new(scf),
+                                7 => InstructionProcedure::new(ccf),
+                                _ => panic!("unreachable")
+                            }
                             _ => todo!()
                         },
                         1 => if y == 6 && z == 6 {
@@ -519,7 +544,7 @@ fn dec_r(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
                 _ => panic!("unreachable")
             };
             cpu.regs.f.set(FlagsReg::Zero, result == 0);
-            cpu.regs.f.set(FlagsReg::Negative, false);
+            cpu.regs.f.set(FlagsReg::Negative, true);
             cpu.regs.f.set(FlagsReg::HalfCarry, over);
             
             proc.done = true;
@@ -532,8 +557,83 @@ fn dec_r(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         3 => {
             bus.write(cpu.regs.hl(), proc.tmp0);
             cpu.regs.f.set(FlagsReg::Zero, proc.tmp0 == 0);
-            cpu.regs.f.set(FlagsReg::Negative, false);
+            cpu.regs.f.set(FlagsReg::Negative, true);
             cpu.regs.f.set(FlagsReg::HalfCarry, proc.tmp1 != 0);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+
+fn inc_rp(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            let opcode = bus.read(cpu.regs.pc - 1);
+            proc.tmp0 = (opcode & 0b00110000) >> 4; // p
+            
+            let result = match proc.tmp0 { // calculate new val
+                0 => cpu.regs.bc().wrapping_add(1),
+                1 => cpu.regs.de().wrapping_add(1),
+                2 => cpu.regs.hl().wrapping_add(1),
+                3 => cpu.regs.sp.wrapping_add(1),
+                _ => panic!("unreachable")
+            };
+            proc.tmp1 = (result >> 8) as u8; // store upper
+            
+            match proc.tmp0 { // write lower
+                0 => cpu.regs.c = result as u8,
+                1 => cpu.regs.e = result as u8,
+                2 => cpu.regs.l = result as u8,
+                3 => cpu.regs.set_splo(result as u8),
+                _ => panic!("unreachable")
+            }
+        },
+        2 => {
+            match proc.tmp0 { // write upper
+                0 => cpu.regs.b = proc.tmp1,
+                1 => cpu.regs.d = proc.tmp1,
+                2 => cpu.regs.h = proc.tmp1,
+                3 => cpu.regs.set_sphi(proc.tmp1),
+                _ => panic!("unreachable")
+            }
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+fn dec_rp(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            let opcode = bus.read(cpu.regs.pc - 1);
+            proc.tmp0 = (opcode & 0b00110000) >> 4; // p
+            
+            let result = match proc.tmp0 { // calculate new val
+                0 => cpu.regs.bc().wrapping_sub(1),
+                1 => cpu.regs.de().wrapping_sub(1),
+                2 => cpu.regs.hl().wrapping_sub(1),
+                3 => cpu.regs.sp.wrapping_sub(1),
+                _ => panic!("unreachable")
+            };
+            proc.tmp1 = (result >> 8) as u8; // store upper
+            
+            match proc.tmp0 { // write lower
+                0 => cpu.regs.c = result as u8,
+                1 => cpu.regs.e = result as u8,
+                2 => cpu.regs.l = result as u8,
+                3 => cpu.regs.set_splo(result as u8),
+                _ => panic!("unreachable")
+            }
+        },
+        2 => {
+            match proc.tmp0 >> 4 { // write upper
+                0 => cpu.regs.b = proc.tmp1,
+                1 => cpu.regs.d = proc.tmp1,
+                2 => cpu.regs.h = proc.tmp1,
+                3 => cpu.regs.set_sphi(proc.tmp1),
+                _ => panic!("unreachable")
+            }
             
             proc.done = true;
         },
@@ -675,6 +775,100 @@ fn ld_rr(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     }
 }
 
+/// 0x07
+fn rlca(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            cpu.regs.f.set(FlagsReg::Carry, (cpu.regs.a & 0x80) != 0);
+            cpu.regs.a = cpu.regs.a.rotate_left(1);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0x0F
+fn rrca(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            cpu.regs.f.set(FlagsReg::Carry, (cpu.regs.a & 0x01) != 0);
+            cpu.regs.a = cpu.regs.a.rotate_right(1);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0x17
+fn rla(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            let carry = (cpu.regs.a & 0x80) != 0;
+            cpu.regs.a = (cpu.regs.a.rotate_left(1) & 0xFE) | (cpu.regs.f.intersects(FlagsReg::Carry) as u8);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0x1F
+fn rra(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            let carry = (cpu.regs.a & 0x01) != 0;
+            cpu.regs.a = (cpu.regs.a.rotate_right(1) & 0x7F) | ((cpu.regs.f.intersects(FlagsReg::Carry) as u8) << 7);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0x27
+fn daa(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            todo!();
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0x2F
+fn cpl(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            todo!();
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0x37
+fn scf(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            todo!();
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0x3F
+fn ccf(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            todo!();
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
 
 /// 0xEE
 fn xor_au8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
@@ -790,18 +984,18 @@ fn push(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         },
         2 => (),
         3 => match proc.tmp0 {
-            0 => cpu.stack_push(bus, cpu.regs.c),
-            1 => cpu.stack_push(bus, cpu.regs.e),
-            2 => cpu.stack_push(bus, cpu.regs.l),
-            3 => cpu.stack_push(bus, cpu.regs.f.bits & 0xF0),
+            0 => cpu.stack_push(bus, cpu.regs.b),
+            1 => cpu.stack_push(bus, cpu.regs.d),
+            2 => cpu.stack_push(bus, cpu.regs.h),
+            3 => cpu.stack_push(bus, cpu.regs.a),
             _ => panic!("unreachable")
         },
         4 => {
             match proc.tmp0 {
-                0 => cpu.stack_push(bus, cpu.regs.b),
-                1 => cpu.stack_push(bus, cpu.regs.d),
-                2 => cpu.stack_push(bus, cpu.regs.h),
-                3 => cpu.stack_push(bus, cpu.regs.a),
+                0 => cpu.stack_push(bus, cpu.regs.c),
+                1 => cpu.stack_push(bus, cpu.regs.e),
+                2 => cpu.stack_push(bus, cpu.regs.l),
+                3 => cpu.stack_push(bus, cpu.regs.f.bits & 0xF0),
                 _ => panic!("unreachable")
             }
             
