@@ -65,6 +65,7 @@ impl BusAccessable for Bus {
             0xFE00..=0xFEFF => self.ppu.write(addr, data),  // OAM and prohibited
             
             0xFF00..=0xFF02 | 0xFF04..=0xFF07 => self.cpu.write(addr, data), // Input, Serial, and Timer/Divider
+            0xFF0F => self.cpu.write(addr, data),                            // Interrupt Flag
             0xFF10..=0xFF26 | 0xFF30..=0xFF3F => self.apu.write(addr, data), // Sound and Wave Pattern
             0xFF40..=0xFF4B | 0xFF4F => self.ppu.write(addr, data),          // PPU controls and VRAM Bank Select
             0xFF50 => self.boot_disabled = data,                             // Disable boot ROM
@@ -91,6 +92,7 @@ impl BusAccessable for Bus {
             0xFE00..=0xFEFF => self.ppu.read(addr),  // OAM and prohibited
             
             0xFF00..=0xFF02 | 0xFF04..=0xFF07 => self.cpu.read(addr), // Input, Serial, and Timer/Divider
+            0xFF0F => self.cpu.read(addr),                            // Interrupt Flag
             0xFF10..=0xFF26 | 0xFF30..=0xFF3F => self.apu.read(addr), // Sound and Wave Pattern
             0xFF40..=0xFF4B | 0xFF4F => self.ppu.read(addr),          // PPU controls and VRAM Bank Select
             0xFF50 => self.boot_disabled,                             // Disable boot ROM

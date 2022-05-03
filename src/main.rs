@@ -40,7 +40,7 @@ fn main() {
     
     let mut gb = Gameboy::new(SystemMode::Gameboy);
     gb.bus.get_mut().boot_rom = *include_bytes!("../bootroms/DMG1.rom");
-    gb.bus.get_mut().cart.rom.extend_from_slice(include_bytes!("/data/storage/roms/gb-nointro/Boxxle (USA).gb"));
+    gb.bus.get_mut().cart.rom.extend_from_slice(include_bytes!("../testroms/mooneye/acceptance/serial/boot_sclk_align-dmgABCmgb.gb"));
     
     let mut log = String::new();
     

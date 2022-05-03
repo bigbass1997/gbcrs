@@ -13,7 +13,6 @@ pub struct InstructionProcedure {
     mcycle: u8,
     tmp0: u8,
     tmp1: u8,
-    tmp_addr: u16,
 }
 impl Debug for InstructionProcedure {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -31,7 +30,6 @@ impl InstructionProcedure {
             mcycle: 1,
             tmp0: 0,
             tmp1: 0,
-            tmp_addr: 0
         }
     }
     
@@ -78,22 +76,22 @@ impl Regs {
     pub fn new(mode: SystemMode) -> Self {
         use SystemMode::*;
         match mode {
-            /*Gameboy => Self {
+            Gameboy => Self {
                 a: 0x01, f: FlagsReg::from_bits_truncate(0xB0),
                 b: 0x00, c: 0x13,
                 d: 0x00, e: 0xD8,
                 h: 0x01, l: 0x4D,
                 sp: 0xFFFE,
                 pc: 0x0000,
-            },*/
-            Gameboy => Self {
+            },
+            /*Gameboy => Self {
                 a: 0x00, f: FlagsReg::from_bits_truncate(0x00),
                 b: 0x00, c: 0x00,
                 d: 0x00, e: 0x00,
                 h: 0x00, l: 0x00,
                 sp: 0x0000,
                 pc: 0x0000,
-            },
+            },*/
             GameboyPocket => Self {
                 a: 0xFF, f: FlagsReg::from_bits_truncate(0xB0),
                 b: 0x00, c: 0x13,
@@ -219,6 +217,10 @@ pub struct Cpu {
     tcount: u8,
     pub procedure: Option<InstructionProcedure>,
     pub regs: Regs,
+    pub interrupt_flags: u8,
+    pub interrupt_enable: u8,
+    en_ime: (bool, u8),
+    pub ime: bool,
 }
 impl Cpu {
     pub fn new(mode: SystemMode) -> Self { Self {
@@ -227,6 +229,10 @@ impl Cpu {
         tcount: 0,
         procedure: None,
         regs: Regs::new(mode),
+        interrupt_flags: 0,
+        interrupt_enable: 0,
+        en_ime: (false, 0),
+        ime: false,
     }}
     
     pub fn tcycle(&mut self, bus: &mut Bus) {
@@ -237,7 +243,13 @@ impl Cpu {
             );
             
             if self.procedure.is_none() {
-                
+                if self.en_ime.0 {
+                    self.en_ime.1 += 1;
+                    if self.en_ime.1 == 2 {
+                        self.en_ime = (false, 0);
+                        self.ime = true;
+                    }
+                }
                 
                 let opcode = self.fetch(bus);
                 let x = (opcode & 0b11000000) >> 6;
@@ -259,8 +271,8 @@ impl Cpu {
                         match x {
                             0 => InstructionProcedure::new(rot),
                             1 => InstructionProcedure::new(bit),
-                            2 => todo!(),
-                            3 => todo!(),
+                            2 => InstructionProcedure::new(res),
+                            3 => InstructionProcedure::new(set),
                             _ => panic!("unreachable")
                         }
                     },
@@ -321,6 +333,7 @@ impl Cpu {
                         },
                         3 => match z {
                             0 => match y {
+                                0..=3 => InstructionProcedure::new(ret_cond),
                                 4 => InstructionProcedure::new(ld_toio_u8),
                                 6 => InstructionProcedure::new(ld_fromio_u8),
                                 _ => todo!()
@@ -342,6 +355,14 @@ impl Cpu {
                                 7 => InstructionProcedure::new(ld_au16),
                                 _ => todo!()
                             },
+                            3 => match y {
+                                0 => InstructionProcedure::new(jp_u16),
+                                1 => panic!("CB prefix"),
+                                2..=5 => panic!("removed opcode"),
+                                6 => InstructionProcedure::new(di),
+                                7 => InstructionProcedure::new(ei),
+                                _ => panic!("unreachable")
+                            }
                             
                             5 => match q {
                                 0 => InstructionProcedure::new(push),
@@ -353,15 +374,15 @@ impl Cpu {
                                 _ => panic!("unreachable")
                             }
                             6 => match y {
-                                //0 => InstructionProcedure::new(add_au8),
+                                0 => InstructionProcedure::new(add_au8),
                                 //1 => InstructionProcedure::new(adc_au8),
-                                //2 => InstructionProcedure::new(sub_au8),
+                                2 => InstructionProcedure::new(sub_au8),
                                 //3 => InstructionProcedure::new(sbc_au8),
-                                //4 => InstructionProcedure::new(and_au8),
-                                //5 => InstructionProcedure::new(xor_au8),
-                                //6 => InstructionProcedure::new(or_au8),
+                                4 => InstructionProcedure::new(and_au8),
+                                5 => InstructionProcedure::new(xor_au8),
+                                6 => InstructionProcedure::new(or_au8),
                                 7 => InstructionProcedure::new(cp_au8),
-                                _ => todo!()
+                                _ => todo!("y: {}", y)
                             }
                             _ => todo!()
                         },
@@ -409,7 +430,13 @@ impl Cpu {
 
 impl BusAccessable for Cpu {
     fn write(&mut self, addr: u16, data: u8) {
-        todo!("write {:#04X} to {:#06X}", data, addr)
+        match addr {
+            0xFF01 => print!("{}", String::from_utf8_lossy(&[data])),
+            0xFF02 => (), //TODO
+            0xFF0F => self.interrupt_flags = data,
+            0xFFFF => self.interrupt_enable = data,
+            _ => todo!("write {:#04X} to {:#06X}", data, addr)
+        }
     }
 
     fn read(&mut self, addr: u16) -> u8 {
@@ -510,6 +537,43 @@ fn jr_cond(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
             
             proc.done = true;
         },
+        _ => ()
+    }
+}
+/// 0xC3
+fn jp_u16(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => proc.tmp0 = cpu.fetch(bus),
+        3 => proc.tmp1 = cpu.fetch(bus),
+        4 => {
+            cpu.regs.set_pclo(proc.tmp0);
+            cpu.regs.set_pchi(proc.tmp1);
+            
+            proc.done = true;
+        }
+        _ => ()
+    }
+}
+
+/// 0xF3
+fn di(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            cpu.ime = false;
+            
+            proc.done = true;
+        }
+        _ => ()
+    }
+}
+/// 0xFB
+fn ei(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            cpu.en_ime = (true, 0);
+            
+            proc.done = true;
+        }
         _ => ()
     }
 }
@@ -1099,21 +1163,88 @@ fn ccf(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     }
 }
 
+
+/// 0xC6
+fn add_au8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => {
+            let (result, zer, _, half, carry) = alu_add(cpu.regs.a, cpu.fetch(bus));
+            cpu.regs.a = result;
+            cpu.regs.f.set(FlagsReg::Zero, zer);
+            cpu.regs.f.set(FlagsReg::Negative, false);
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0xD6
+fn sub_au8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => {
+            let (result, zer, _, half, carry) = alu_sub(cpu.regs.a, cpu.fetch(bus));
+            cpu.regs.a = result;
+            cpu.regs.f.set(FlagsReg::Zero, zer);
+            cpu.regs.f.set(FlagsReg::Negative, true);
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0xE6
+fn and_au8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => {
+            cpu.regs.a &= cpu.fetch(bus);
+            cpu.regs.f.bits = 0;
+            cpu.regs.f.set(FlagsReg::Zero, cpu.regs.a == 0);
+            cpu.regs.f.set(FlagsReg::HalfCarry, true);
+            
+            proc.done = true;
+        }
+        _ => ()
+    }
+}
 /// 0xEE
 fn xor_au8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
-    todo!()
+    match proc.mcycle {
+        2 => {
+            cpu.regs.a ^= cpu.fetch(bus);
+            cpu.regs.f.bits = 0;
+            cpu.regs.f.set(FlagsReg::Zero, cpu.regs.a == 0);
+            
+            proc.done = true;
+        }
+        _ => ()
+    }
+}
+/// 0xF6
+fn or_au8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => {
+            cpu.regs.a |= cpu.fetch(bus);
+            cpu.regs.f.bits = 0;
+            cpu.regs.f.set(FlagsReg::Zero, cpu.regs.a == 0);
+            
+            proc.done = true;
+        }
+        _ => ()
+    }
 }
 /// 0xFE
 fn cp_au8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     match proc.mcycle {
         2 => {
-            let val = cpu.fetch(bus);
-            let result = cpu.regs.a - val;
-            
-            cpu.regs.f.set(FlagsReg::Zero, result == 0);
+            let (result, zer, _, half, carry) = alu_sub(cpu.regs.a, cpu.fetch(bus));
+            cpu.regs.f.set(FlagsReg::Zero, zer);
             cpu.regs.f.set(FlagsReg::Negative, true);
-            cpu.regs.f.set(FlagsReg::HalfCarry, ((cpu.regs.a & 0x0F).wrapping_sub(val & 0x0F) & 0x10) != 0);
-            cpu.regs.f.set(FlagsReg::Carry, val > cpu.regs.a);
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
             
             proc.done = true;
         }
@@ -1275,6 +1406,34 @@ fn ret(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         2 => proc.tmp0 = cpu.stack_pop(bus),
         3 => proc.tmp1 = cpu.stack_pop(bus),
         4 => {
+            cpu.regs.set_pclo(proc.tmp0);
+            cpu.regs.set_pchi(proc.tmp1);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+/// 0xC0, 0xC8, 0xD0, 0xD8
+fn ret_cond(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => {
+            let opcode = bus.read(cpu.regs.pc - 1);
+            let cond = match (opcode & 0b00111000) >> 3 { // cc[y]
+                0 => !cpu.regs.f.contains(FlagsReg::Zero),
+                1 => cpu.regs.f.contains(FlagsReg::Zero),
+                2 => !cpu.regs.f.contains(FlagsReg::Carry),
+                3 => cpu.regs.f.contains(FlagsReg::Carry),
+                _ => panic!("unreachable")
+            };
+            
+            if !cond {
+                proc.done = true;
+            }
+        },
+        3 => proc.tmp0 = cpu.stack_pop(bus),
+        4 => proc.tmp1 = cpu.stack_pop(bus),
+        5 => {
             cpu.regs.set_pclo(proc.tmp0);
             cpu.regs.set_pchi(proc.tmp1);
             
@@ -1481,6 +1640,70 @@ fn bit(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
             
             proc.done = true;
         }
+        _ => ()
+    }
+}
+
+fn res(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => {
+            let opcode = bus.read(cpu.regs.pc - 1);
+            let y = (opcode & 0b00111000) >> 3;
+            let z = opcode & 0b00000111;
+            proc.tmp0 = y;
+            
+            match z {
+                0 => cpu.regs.b &= !(1 << y),
+                1 => cpu.regs.c &= !(1 << y),
+                2 => cpu.regs.d &= !(1 << y),
+                3 => cpu.regs.e &= !(1 << y),
+                4 => cpu.regs.h &= !(1 << y),
+                5 => cpu.regs.l &= !(1 << y),
+                6 => return,
+                7 => cpu.regs.a &= !(1 << y),
+                _ => panic!("unreachable")
+            };
+            
+            proc.done = true;
+        },
+        3 => proc.tmp1 = bus.read(cpu.regs.hl()),
+        4 => {
+            bus.write(cpu.regs.hl(), proc.tmp1 & (!(1 << proc.tmp0)) );
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+
+fn set(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => {
+            let opcode = bus.read(cpu.regs.pc - 1);
+            let y = (opcode & 0b00111000) >> 3;
+            let z = opcode & 0b00000111;
+            proc.tmp0 = y;
+            
+            match z {
+                0 => cpu.regs.b |= 1 << y,
+                1 => cpu.regs.c |= 1 << y,
+                2 => cpu.regs.d |= 1 << y,
+                3 => cpu.regs.e |= 1 << y,
+                4 => cpu.regs.h |= 1 << y,
+                5 => cpu.regs.l |= 1 << y,
+                6 => return,
+                7 => cpu.regs.a |= 1 << y,
+                _ => panic!("unreachable")
+            };
+            
+            proc.done = true;
+        },
+        3 => proc.tmp1 = bus.read(cpu.regs.hl()),
+        4 => {
+            bus.write(cpu.regs.hl(), proc.tmp1 | (1 << proc.tmp0) );
+            
+            proc.done = true;
+        },
         _ => ()
     }
 }
