@@ -1,6 +1,7 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use clap::{AppSettings, Arg, Command};
 use log::{info, LevelFilter};
+use minifb::{Key, KeyRepeat, Scale, ScaleMode, Window, WindowOptions};
 use crate::arch::{Gameboy, SystemMode};
 
 pub mod arch;
@@ -36,44 +37,48 @@ fn main() {
         logbuilder.filter_level(level);
         logbuilder.init();
     }
+    const width: usize = 160;
+    const height: usize = 144;
+    //const width: usize = 256;
+    //const height: usize = 256;
     
+    
+    let mut window = Window::new("gbcrs", width, height, WindowOptions {
+        borderless: false,
+        title: true,
+        resize: false,
+        scale: Scale::X4,
+        scale_mode: ScaleMode::Stretch,
+        topmost: false,
+        transparency: false,
+        none: false
+    }).unwrap();
+    window.limit_update_rate(Some(Duration::from_secs_f64(1.0 / 60.0)));
+    //window.limit_update_rate(None);
+    let mut window_buf = [0u32; width * height];
     
     let mut gb = Gameboy::new(SystemMode::Gameboy);
     gb.bus.get_mut().boot_rom = *include_bytes!("../bootroms/DMG1.rom");
     gb.bus.get_mut().cart.rom.extend_from_slice(include_bytes!("../testroms/mooneye/acceptance/serial/boot_sclk_align-dmgABCmgb.gb"));
     
-    let mut log = String::new();
-    
-    let start = Instant::now();
-    
-    use crate::arch::BusAccessable;
-    let mut last_count = 0usize;
-    let mut counter = 0usize;
-    loop {
-        /*let bus = gb.bus.get_mut();
-        let cpu = &gb.bus.get().cpu;
-        if cpu.instr_count > last_count || cpu.instr_count == 0 {
-            last_count = cpu.instr_count;
-            let s = format!("A: {:02X} F: {:02X} B: {:02X} C: {:02X} D: {:02X} E: {:02X} H: {:02X} L: {:02X} SP: {:04X} PC: 00:{:04X} ({:02X} {:02X} {:02X} {:02X})\n",
-                cpu.regs.a, cpu.regs.f.bits(), cpu.regs.b, cpu.regs.c, cpu.regs.d, cpu.regs.e, cpu.regs.h, cpu.regs.l, cpu.regs.sp, cpu.regs.pc, bus.read(cpu.regs.pc), bus.read(cpu.regs.pc + 1), bus.read(cpu.regs.pc + 2), bus.read(cpu.regs.pc + 3)
-            );
-            log.push_str(&s);
-        }
+    let mut frames = 0;
+    while window.is_open() && !window.is_key_down(Key::Escape) {
+        let start = Instant::now();
         
-        if cpu.instr_count == 47932 {
-            std::fs::write("log.txt", log).unwrap();
-            std::process::exit(0);
-        }*/
+        //if window.is_key_pressed(Key::Space, KeyRepeat::No) || window.is_key_down(Key::M) {
+        //    info!("f: {}", frames);
+            for _ in 0..(2097152 / 2 / 60) {
+                gb.mcycle();
+            }
+        //    frames += 1;
+        //}
         
-        gb.mcycle();
-        counter += 1;
         
-        if counter == 2097152 * 60 {
-            let elapsed = start.elapsed().as_secs_f64();
-            info!("Time: {:.3}us | Factor: {:.3}", elapsed * 1000000.0, 60.0 / elapsed);
-            
-            break;
-        }
+        gb.bus.get().ppu.render(&mut window_buf);
+        window.update_with_buffer(&window_buf, width, height).unwrap();
+        
+        let elapsed = start.elapsed().as_secs_f64();
+        //info!("Time: {:.3}us | Factor: {:.3}", elapsed * 1000000.0, (1.0 / 60.0) / elapsed);
     }
     
     

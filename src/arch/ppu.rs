@@ -1,5 +1,10 @@
-
+use log::info;
 use crate::arch::{Bus, BusAccessable, SystemMode};
+
+#[derive(Clone, Debug, Default)]
+pub struct Tile {
+    pub pixels: [[u32; 8]; 8],
+}
 
 #[derive(Clone, Debug)]
 pub struct Ppu {
@@ -27,7 +32,7 @@ pub struct Ppu {
 impl Ppu {
     pub fn new(mode: SystemMode) -> Self { Self {
         mode,
-        vram: [0xAAu8; 0x2000],
+        vram: [0u8; 0x2000],
         lcdc: 0,
         stat: 0,
         bgp: 0,
@@ -41,6 +46,83 @@ impl Ppu {
     
     pub fn tcycle(&mut self, bus: &mut Bus) {
         
+    }
+    
+    pub fn render(&self, buf: &mut [u32]) {
+        /*for i in 0..buf.len() {
+            if let Some(vram_pix) = self.vram.get(i) {
+                buf[i] = *vram_pix as u32;
+            }
+        }*/
+        
+        
+        
+        let mut x = 0;
+        let mut y = 0;
+        let width = 160;
+        for tile in self.tiles() {
+            for ty in 0..8 {
+                for tx in 0..8 {
+                    if (y * width) + x >= buf.len() { return; }
+                    //println!("{}, {}", x, y);
+                    buf[(y * width) + x] = tile.pixels[tx][ty];
+                    x += 1;
+                }
+                x -= 8;
+                y += 1;
+            }
+            y -= 8;
+            x += 8;
+            
+            if x >= 150 {
+                x = 0;
+                y += 8;
+            }
+        }
+    }
+    
+    fn tiles(&self) -> Vec<Tile> {
+        let mut tiles = vec![];
+        let mut chunks = self.vram[0..=0x07FF].chunks_exact(16);
+        
+        for _ in 0..chunks.len() {
+            let chunk = chunks.next().unwrap();
+            let mut tile = Tile::default();
+            let mut row = 0;
+            for bi in (0..16).step_by(2) {
+                let lsb = chunk[bi];
+                let msb = chunk[bi + 1];
+                
+                let mut col = 0;
+                for idi in (0..8).rev() {
+                    let msb = msb & (1 << idi) >> idi;
+                    let lsb = lsb & (1 << idi) >> idi;
+                    
+                    let colori = (msb << 1) | lsb;
+                    tile.pixels[row][col] = self.palette(colori);
+                    
+                    col += 1;
+                }
+                row += 1;
+            }
+            
+            tiles.push(tile);
+        }
+        
+        tiles
+    }
+    
+    fn palette(&self, index: u8) -> u32 {
+        match index {
+            0 => 0x00331111,
+            1 => 0x00666666,
+            2 => 0x00AAAAAA,
+            3 => 0x00FFFFFF,
+            _ => {
+                info!("colori: {:08b}", index);
+                0x00FF0000
+            },
+        }
     }
 }
 
