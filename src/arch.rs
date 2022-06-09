@@ -39,7 +39,7 @@ pub struct Bus {
     pub cart: Cartridge,
     pub apu: Apu,
     pub boot_rom: [u8; 0x100],
-    boot_disabled: u8,
+    pub boot_disabled: u8,
 }
 impl Bus {
     pub fn new(mode: SystemMode) -> Self { Self {

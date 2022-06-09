@@ -83,7 +83,7 @@ impl Ppu {
     
     fn tiles(&self) -> Vec<Tile> {
         let mut tiles = vec![];
-        let mut chunks = self.vram[0..=0x07FF].chunks_exact(16);
+        let mut chunks = self.vram[0..=0x17FF].chunks_exact(16);
         
         for _ in 0..chunks.len() {
             let chunk = chunks.next().unwrap();
@@ -115,11 +115,10 @@ impl Ppu {
     fn palette(&self, index: u8) -> u32 {
         match index {
             0 => 0x00331111,
-            1 => 0x00666666,
-            2 => 0x00AAAAAA,
+            1 => 0x00116611,
+            2 => 0x001111AA,
             3 => 0x00FFFFFF,
             _ => {
-                info!("colori: {:08b}", index);
                 0x00FF0000
             },
         }
@@ -140,6 +139,13 @@ impl BusAccessable for Ppu {
             0xFF4A => self.wy = data, //TODO: Check if register can be set above value 143
             0xFF4B => self.wx = data, //TODO: Check if register can be set above value 166
             _ => todo!("write {:#04X} to {:#06X}", data, addr)
+        }
+        
+        match addr {
+            0x8000..=0x9FFF => {
+                info!("Wrote to VRAM: {:02X} ({:02X}) at {:04X}", data, self.vram[(addr & 0x1FFF) as usize], addr);
+            },
+            _ => ()
         }
     }
 

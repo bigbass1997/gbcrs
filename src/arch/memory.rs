@@ -1,4 +1,5 @@
 use std::cmp::max;
+use log::info;
 use crate::arch::{BusAccessable, SystemMode};
 use crate::SystemMode::GameboyColorGBC;
 
@@ -36,6 +37,19 @@ impl BusAccessable for Memory {
             0xFF80..=0xFFFE => self.hram[(addr & 0x7F) as usize] = data,
             
             _ => unimplemented!()
+        }
+        if addr == 0xDD02 {
+            info!("Write to 0xDD02: {:02X}", data);
+            if data != self.read(addr) {
+                panic!("mismatched data")
+            }
+            
+            if data == 0x00 {
+                panic!("wrote 00");
+            }
+        }
+        if data == 0x01 {
+            info!("Writing 0x01 to: {:04X}", addr);
         }
     }
 

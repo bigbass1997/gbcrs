@@ -4,7 +4,7 @@
 use std::fmt::{Debug, Formatter};
 use crate::arch::{Bus, BusAccessable, SystemMode};
 use bitflags::bitflags;
-use log::debug;
+use log::{debug, info};
 
 #[derive(Copy, Clone)]
 pub struct InstructionProcedure {
@@ -288,7 +288,7 @@ impl Cpu {
                             },
                             1 => match q {
                                 0 => InstructionProcedure::new(ld_rpu16),
-                                1 => todo!(), // add_hlrp
+                                1 => InstructionProcedure::new(add_hlrp),
                                 _ => panic!("unreachable")
                             },
                             2 => match q {
@@ -342,9 +342,10 @@ impl Cpu {
                                 0 => InstructionProcedure::new(pop),
                                 1 => match p {
                                     0 => InstructionProcedure::new(ret),
-                                    
+                                    1 => todo!(), // RETI
+                                    2 => InstructionProcedure::new(jp_hl),
                                     3 => InstructionProcedure::new(ld_sphl),
-                                    _ => todo!()
+                                    _ => panic!("unreachable")
                                 }
                                 _ => panic!("unreachable")
                             },
@@ -363,7 +364,11 @@ impl Cpu {
                                 7 => InstructionProcedure::new(ei),
                                 _ => panic!("unreachable")
                             }
-                            
+                            4 => match y {
+                                0..=3 => InstructionProcedure::new(call_cond),
+                                4..=7 => panic!("removed opcode"),
+                                _ => panic!("unreachable"),
+                            }
                             5 => match q {
                                 0 => InstructionProcedure::new(push),
                                 1 => match p {
@@ -375,7 +380,7 @@ impl Cpu {
                             }
                             6 => match y {
                                 0 => InstructionProcedure::new(add_au8),
-                                //1 => InstructionProcedure::new(adc_au8),
+                                1 => InstructionProcedure::new(adc_au8),
                                 2 => InstructionProcedure::new(sub_au8),
                                 //3 => InstructionProcedure::new(sbc_au8),
                                 4 => InstructionProcedure::new(and_au8),
@@ -384,7 +389,7 @@ impl Cpu {
                                 7 => InstructionProcedure::new(cp_au8),
                                 _ => todo!("y: {}", y)
                             }
-                            _ => todo!()
+                            _ => todo!("x: {} | z: {} | y: {}", x, z, y)
                         },
                         _ => panic!("unreachable")
                     }
@@ -416,13 +421,13 @@ impl Cpu {
     }
     
     fn stack_push(&mut self, bus: &mut Bus, data: u8) {
-        self.regs.sp -= 1;
+        self.regs.sp = self.regs.sp.wrapping_sub(1);
         bus.write(self.regs.sp, data);
     }
     
     fn stack_pop(&mut self, bus: &mut Bus) -> u8 {
         let val = bus.read(self.regs.sp);
-        self.regs.sp += 1;
+        self.regs.sp = self.regs.sp.wrapping_add(1);
         
         val
     }
@@ -431,8 +436,9 @@ impl Cpu {
 impl BusAccessable for Cpu {
     fn write(&mut self, addr: u16, data: u8) {
         match addr {
-            0xFF01 => print!("{}", String::from_utf8_lossy(&[data])),
+            0xFF01 => info!("{}", String::from_utf8_lossy(&[data]).to_string()),
             0xFF02 => (), //TODO
+            0xFF07 => (), //TODO
             0xFF0F => self.interrupt_flags = data,
             0xFFFF => self.interrupt_enable = data,
             _ => todo!("write {:#04X} to {:#06X}", data, addr)
@@ -440,7 +446,11 @@ impl BusAccessable for Cpu {
     }
 
     fn read(&mut self, addr: u16) -> u8 {
-        todo!("read from {:#06X}", addr)
+        match addr {
+            0xFF0F => todo!("interrupts not implemented yet"),
+            0xFFFF => self.interrupt_enable,
+            _ => todo!("read from {:#06X}", addr)
+        }
     }
 }
 
@@ -460,9 +470,9 @@ fn ld_u16sp(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     match proc.mcycle {
         2 => proc.tmp0 = cpu.fetch(bus),
         3 => proc.tmp1 = cpu.fetch(bus),
-        4 => cpu.stack_push(bus, proc.tmp0),
+        4 => bus.write(((proc.tmp1 as u16) << 8) | (proc.tmp0 as u16), cpu.regs.splo()),
         5 => {
-            cpu.stack_push(bus, proc.tmp1);
+            bus.write(((proc.tmp1 as u16) << 8) | (proc.tmp0 as u16), cpu.regs.sphi());
             
             proc.done = true;
         },
@@ -554,6 +564,17 @@ fn jp_u16(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         _ => ()
     }
 }
+/// 0xE9
+fn jp_hl(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            cpu.regs.pc = cpu.regs.hl();
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
 
 /// 0xF3
 fn di(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
@@ -582,39 +603,31 @@ fn ei(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
 fn inc_r(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     match proc.mcycle {
         1 => {
-            #[inline]
-            fn mut_overflow_add(reg: &mut u8, over: &mut bool) -> u8 {
-                *over = ((*reg & 0x0F).wrapping_add(1) & 0x10) != 0;
-                *reg = reg.wrapping_add(1);
-                
-                *reg
-            }
-            
             let opcode = bus.read(cpu.regs.pc - 1);
             
-            let mut over = false;
-            let result = match (opcode & 0b00111000) >> 3 { // r[y]
-                0 => mut_overflow_add(&mut cpu.regs.b, &mut over),
-                1 => mut_overflow_add(&mut cpu.regs.c, &mut over),
-                2 => mut_overflow_add(&mut cpu.regs.d, &mut over),
-                3 => mut_overflow_add(&mut cpu.regs.e, &mut over),
-                4 => mut_overflow_add(&mut cpu.regs.h, &mut over),
-                5 => mut_overflow_add(&mut cpu.regs.l, &mut over),
+            let reg = match (opcode & 0b00111000) >> 3 { // r[y]
+                0 => &mut cpu.regs.b,
+                1 => &mut cpu.regs.c,
+                2 => &mut cpu.regs.d,
+                3 => &mut cpu.regs.e,
+                4 => &mut cpu.regs.h,
+                5 => &mut cpu.regs.l,
                 6 => return,
-                7 => mut_overflow_add(&mut cpu.regs.a, &mut over),
+                7 => &mut cpu.regs.a,
                 _ => panic!("unreachable")
             };
-            cpu.regs.f.set(FlagsReg::Zero, result == 0);
+            let (result, zer, _, half, _) = alu_add(*reg, 1);
+            *reg = result;
+            cpu.regs.f.set(FlagsReg::Zero, zer);
             cpu.regs.f.set(FlagsReg::Negative, false);
-            cpu.regs.f.set(FlagsReg::HalfCarry, over);
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
             
             proc.done = true;
         },
         2 => {
-            todo!(); //this code calulates halfcarry wrong
-            let (val, carry) = bus.read(cpu.regs.hl()).overflowing_add(1);
-            proc.tmp0 = val;
-            proc.tmp1 = carry as u8;
+            let (result, _, _, half, _) = alu_add(bus.read(cpu.regs.hl()), 1);
+            proc.tmp0 = result;
+            proc.tmp1 = half as u8;
         },
         3 => {
             bus.write(cpu.regs.hl(), proc.tmp0);
@@ -631,39 +644,31 @@ fn inc_r(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
 fn dec_r(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     match proc.mcycle {
         1 => {
-            #[inline]
-            fn mut_overflow_sub(reg: &mut u8, over: &mut bool) -> u8 {
-                *over = ((*reg & 0x0F).wrapping_sub(1) & 0x10) != 0;
-                *reg = reg.wrapping_sub(1);
-                
-                *reg
-            }
-            
             let opcode = bus.read(cpu.regs.pc - 1);
             
-            let mut over = false;
-            let result = match (opcode & 0b00111000) >> 3 { // r[y]
-                0 => mut_overflow_sub(&mut cpu.regs.b, &mut over),
-                1 => mut_overflow_sub(&mut cpu.regs.c, &mut over),
-                2 => mut_overflow_sub(&mut cpu.regs.d, &mut over),
-                3 => mut_overflow_sub(&mut cpu.regs.e, &mut over),
-                4 => mut_overflow_sub(&mut cpu.regs.h, &mut over),
-                5 => mut_overflow_sub(&mut cpu.regs.l, &mut over),
+            let reg = match (opcode & 0b00111000) >> 3 { // r[y]
+                0 => &mut cpu.regs.b,
+                1 => &mut cpu.regs.c,
+                2 => &mut cpu.regs.d,
+                3 => &mut cpu.regs.e,
+                4 => &mut cpu.regs.h,
+                5 => &mut cpu.regs.l,
                 6 => return,
-                7 => mut_overflow_sub(&mut cpu.regs.a, &mut over),
+                7 => &mut cpu.regs.a,
                 _ => panic!("unreachable")
             };
+            let (result, zer, _, half, _) = alu_sub(*reg, 1);
+            *reg = result;
             cpu.regs.f.set(FlagsReg::Zero, result == 0);
             cpu.regs.f.set(FlagsReg::Negative, true);
-            cpu.regs.f.set(FlagsReg::HalfCarry, over);
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
             
             proc.done = true;
         },
         2 => {
-            todo!(); //this code calulates halfcarry wrong
-            let (val, carry) = bus.read(cpu.regs.hl()).overflowing_sub(1);
-            proc.tmp0 = val;
-            proc.tmp1 = carry as u8;
+            let (result, _, _, half, _) = alu_sub(bus.read(cpu.regs.hl()), 1);
+            proc.tmp0 = result;
+            proc.tmp1 = half as u8;
         },
         3 => {
             bus.write(cpu.regs.hl(), proc.tmp0);
@@ -1180,6 +1185,22 @@ fn add_au8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         _ => ()
     }
 }
+/// 0xCE
+fn adc_au8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => {
+            let (result, zer, _, half, carry) = alu_adc(cpu.regs.a, cpu.fetch(bus), cpu.regs.f.intersects(FlagsReg::Carry));
+            cpu.regs.a = result;
+            cpu.regs.f.set(FlagsReg::Zero, zer);
+            cpu.regs.f.set(FlagsReg::Negative, false);
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
 /// 0xD6
 fn sub_au8(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     match proc.mcycle {
@@ -1382,6 +1403,39 @@ fn push(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     }
 }
 
+/// 0xC4, 0xCC, 0xD4, 0xDC
+fn call_cond(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        2 => proc.tmp0 = cpu.fetch(bus),
+        3 => {
+            proc.tmp1 = cpu.fetch(bus);
+            
+            let opcode = bus.read(cpu.regs.pc - 3);
+            let cond = match (opcode & 0b00111000) >> 3 { // cc[y]
+                0 => !cpu.regs.f.contains(FlagsReg::Zero),
+                1 => cpu.regs.f.contains(FlagsReg::Zero),
+                2 => !cpu.regs.f.contains(FlagsReg::Carry),
+                3 => cpu.regs.f.contains(FlagsReg::Carry),
+                _ => panic!("unreachable")
+            };
+            
+            if !cond {
+                proc.done = true;
+            }
+        },
+        4 => (),
+        5 => cpu.stack_push(bus, cpu.regs.pchi()),
+        6 => {
+            cpu.stack_push(bus, cpu.regs.pclo());
+            
+            cpu.regs.set_pclo(proc.tmp0);
+            cpu.regs.set_pchi(proc.tmp1);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
 /// 0xCD
 fn call_u16(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
     match proc.mcycle {
@@ -1436,6 +1490,36 @@ fn ret_cond(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
         5 => {
             cpu.regs.set_pclo(proc.tmp0);
             cpu.regs.set_pchi(proc.tmp1);
+            
+            proc.done = true;
+        },
+        _ => ()
+    }
+}
+
+/// 0x09, 0x19, 0x29, 0x39
+fn add_hlrp(proc: &mut InstructionProcedure, cpu: &mut Cpu, bus: &mut Bus) {
+    match proc.mcycle {
+        1 => {
+            let opcode = bus.read(cpu.regs.pc - 1);
+            let p = (opcode & 0b00110000) >> 4; // p
+            
+            let val = match p {
+                0 => cpu.regs.bc(),
+                1 => cpu.regs.de(),
+                2 => cpu.regs.hl(),
+                3 => cpu.regs.sp,
+                _ => panic!("unreachable")
+            };
+            let (result, _, _, half, carry) = alu_add_u16(cpu.regs.hl(), val);
+            proc.tmp0 = (result >> 8) as u8;
+            cpu.regs.l = result as u8;
+            cpu.regs.f.set(FlagsReg::Negative, false); // these flags might technically be set in mcycle #2 (unconfirmed)
+            cpu.regs.f.set(FlagsReg::HalfCarry, half);
+            cpu.regs.f.set(FlagsReg::Carry, carry);
+        },
+        2 => {
+            cpu.regs.h = proc.tmp0;
             
             proc.done = true;
         },
@@ -1722,6 +1806,18 @@ fn alu_add(lhs: u8, rhs: u8) -> (u8, bool, bool, bool, bool) {
 }
 
 #[inline(always)]
+fn alu_add_u16(lhs: u16, rhs: u16) -> (u16, bool, bool, bool, bool) {
+    let result = lhs.wrapping_add(rhs);
+    (
+        result,
+        result == 0,
+        (result as i16).is_negative(),
+        ((lhs & 0x0FFF).wrapping_add(rhs & 0x0FFF) & 0x1000) != 0, //TODO: check if this is correct for 'add'
+        lhs.overflowing_add(rhs).1,
+    )
+}
+
+#[inline(always)]
 fn alu_sub(lhs: u8, rhs: u8) -> (u8, bool, bool, bool, bool) {
     let result = lhs.wrapping_sub(rhs);
     (
@@ -1730,5 +1826,17 @@ fn alu_sub(lhs: u8, rhs: u8) -> (u8, bool, bool, bool, bool) {
         (result as i8).is_negative(),
         ((lhs & 0x0F).wrapping_sub(rhs & 0x0F) & 0x10) != 0,
         lhs.overflowing_sub(rhs).1,
+    )
+}
+
+#[inline(always)]
+fn alu_adc(lhs: u8, rhs: u8, carry: bool) -> (u8, bool, bool, bool, bool) {
+    let result = lhs.wrapping_add(rhs).wrapping_add(carry as u8);
+    (
+        result,
+        result == 0,
+        (result as i8).is_negative(),
+        ((lhs & 0x0F).wrapping_add(rhs & 0x0F).wrapping_add(carry as u8) & 0x10) != 0, //TODO: check if this is correct for 'adc'
+        lhs.overflowing_add(rhs).1 || (carry && result == 0x00),
     )
 }

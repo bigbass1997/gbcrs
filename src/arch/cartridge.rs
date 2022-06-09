@@ -13,7 +13,10 @@ impl Cartridge {
 
 impl BusAccessable for Cartridge {
     fn write(&mut self, addr: u16, data: u8) {
-        todo!("write {:#04X} to {:#06X}", data, addr)
+        match addr {
+            0x0000..=0x00FF => (),
+            _ => todo!("write {:#04X} to {:#06X}", data, addr)
+        }
     }
 
     fn read(&mut self, addr: u16) -> u8 {
